@@ -1,0 +1,30 @@
+#!/usr/bin/with-contenv sh
+set -x
+
+rm -f /etc/nginx/sites-enabled/default
+
+sed -i "s/{{ENVIRONMENT_TYPE}}/${ENVIRONMENT_TYPE}/g" /etc/nginx/includes/magento/main.conf
+sed -i "s/{{ENVIRONMENT_NAME}}/${ENVIRONMENT_NAME}/g" /etc/nginx/includes/magento/main.conf
+
+##########
+## Generate maps config from variables:
+
+domains=$(echo $MAGENTO_WEBSITE_HOSTS)
+codes=$(echo $MAGENTO_WEBSITE_CODES)
+
+echo 'map $host $MAGE_RUN_CODE {' >> /etc/nginx/includes/magento/maps.conf
+echo 'default admin;' >> /etc/nginx/includes/magento/maps.conf
+
+domain=
+while test "$domains" != "$domain"; do
+    domain="${domains%%,*}"; domains="${domains#*,}"
+    code="${codes%%,*}"; codes="${codes#*,}"
+    echo "~^$domain $code;" >> /etc/nginx/includes/magento/maps.conf
+done
+
+echo '}' >> /etc/nginx/includes/magento/maps.conf
+echo 'map $request_uri $MAGE_RUN_TYPE {'  >> /etc/nginx/includes/magento/maps.conf
+echo 'default website;'  >> /etc/nginx/includes/magento/maps.conf
+echo '}'  >> /etc/nginx/includes/magento/maps.conf
+
+

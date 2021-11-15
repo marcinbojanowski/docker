@@ -1,0 +1,95 @@
+#!/usr/bin/with-contenv sh
+
+set -x
+
+#install magento via composer
+cd /var/www/magento
+
+WAITFORSERVICE() {
+  EXPONENTIAL_BACKOFF=0;
+  while [ ${EXPONENTIAL_BACKOFF} -lt 7 ];
+  do
+    EXPONENTIAL_BACKOFF=$((${EXPONENTIAL_BACKOFF}+1))
+      echo "waiting for" "$1" "to open port" "$2"
+      nc -w 1 -z $1 $2 && break;
+      DELAY=$(echo "2^${EXPONENTIAL_BACKOFF}" | bc)
+      sleep $DELAY
+  done
+}
+
+# check if magento installed
+if composer show magento/product-community-edition; then
+    echo "Magento already installed"
+else
+    echo "Installing magento"
+    composer config --global http-basic.repo.magento.com 19416789aa2424019a6dbc95e991edad 3620566a8361816b548cdad4893c86bf
+
+    #check if composer.json exists
+    if [ -f "/var/www/magento/composer.json" ]; then
+        composer config repositories.magento composer https://repo.magento.com/
+        composer require magento/product-community-edition
+    else
+        MAGENTO_TEMP_INSTALL_DIR=/tmp/magento-new-installation
+        composer create-project --repository-url=https://repo.magento.com/ magento/project-community-edition ${MAGENTO_TEMP_INSTALL_DIR}
+        cp -Rf ${MAGENTO_TEMP_INSTALL_DIR}/* /var/www/magento/
+        rm -rf ${MAGENTO_TEMP_INSTALL_DIR}
+    fi
+
+    chown magento:magento -R /var/www/magento/
+    chown magento:magento -R ~/.composer/cache
+fi
+
+if [ ! -f "/var/www/magento/app/etc/env.php" ]; then
+
+    # wait up to 30s for other services to be ready, otherwise setup command can crash
+    WAITFORSERVICE ${MAGENTO_CACHE_REDIS_HOST} ${MAGENTO_CACHE_REDIS_PORT}
+    WAITFORSERVICE ${MAGENTO_SESSION_REDIS_HOST} ${MAGENTO_SESSION_REDIS_PORT}
+    WAITFORSERVICE ${MAGENTO_ES_HOST} ${MAGENTO_ES_PORT}
+    WAITFORSERVICE ${MAGENTO_AMQP_HOST} ${MAGENTO_AMQP_PORT}
+
+    sudo -u magento bin/magento setup:install \
+    --backend-frontname=${MAGENTO_BACKEND_FRONTNAME} \
+    --base-url=https://${MAGENTO_BASE_URL}/ \
+    --db-host=${MAGENTO_DB_HOST} \
+    --db-name=${MAGENTO_DB_NAME} \
+    --db-user=${MAGENTO_DB_USER} \
+    --db-password=${MAGENTO_DB_PASSWORD} \
+    --admin-firstname=Magento \
+    --admin-lastname=User \
+    --admin-email=${MAGENTO_ADMIN_EMAIL}\
+    --admin-user=${MAGENTO_ADMIN_USER} \
+    --admin-password=${MAGENTO_ADMIN_PASS} \
+    --language=en_US \
+    --currency=USD \
+    --timezone=America/Chicago \
+    --use-rewrites=1 \
+    --search-engine=elasticsearch7 \
+    --elasticsearch-host=${MAGENTO_ES_HOST} \
+    --elasticsearch-port=${MAGENTO_ES_PORT} \
+    --consumers-wait-for-messages 0 \
+    --amqp-host ${MAGENTO_AMQP_HOST} \
+    --amqp-port ${MAGENTO_AMQP_PORT} \
+    --amqp-user ${MAGENTO_AMQP_USER} \
+    --amqp-password=${MAGENTO_AMQP_PASS} \
+    --session-save=redis \
+    --session-save-redis-host=${MAGENTO_SESSION_REDIS_HOST} \
+    --session-save-redis-port=${MAGENTO_SESSION_REDIS_PORT} \
+    --session-save-redis-db=${MAGENTO_SESSION_REDIS_DB} \
+    --cache-backend=redis \
+    --cache-backend-redis-server=${MAGENTO_CACHE_REDIS_HOST} \
+    --cache-backend-redis-db=${MAGENTO_CACHE_REDIS_DB} \
+    --cache-backend-redis-port=${MAGENTO_CACHE_REDIS_PORT}
+
+    sudo -u magento bin/magento setup:upgrade || true
+    sudo -u magento bin/magento setup:di:compile || true
+    sudo -u magento bin/magento setup:static-content:deploy || true
+fi
+
+
+sudo -u magento bin/magento config:set "web/unsecure/base_url" "https://${MAGENTO_BASE_URL}/"  || true
+sudo -u magento bin/magento config:set "web/secure/base_url" "https://${MAGENTO_BASE_URL}/"  || true
+sudo -u magento bin/magento config:set "web/unsecure/base_link_url" "https://${MAGENTO_BASE_URL}/"  || true
+sudo -u magento bin/magento config:set "web/secure/base_link_url" "https://${MAGENTO_BASE_URL}/"  || true
+
+sudo -u magento bin/magento cache:flush
+

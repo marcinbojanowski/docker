@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv sh
+set -x
+
+touch /etc/crontab /etc/cron.*/*
+
+touch /var/www/magento/var/log/magento.cron.log
+chown magento:magento /var/www/magento/var/log/magento.cron.log
+
+echo "* * * * * magento php /var/www/magento/bin/magento cron:run >> /var/www/magento/var/log/magento.cron.log\n" >> /etc/crontab

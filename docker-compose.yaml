@@ -1,0 +1,121 @@
+version: '3.7'
+
+volumes:
+  mysql_data:
+  es_data:
+  rabbit_data:
+
+services:
+  db:
+    restart: always
+    container_name: magento-db
+    env_file:
+      - '.env'
+    build:
+      context: db
+    volumes:
+      - mysql_data:/var/lib/mysql:rw
+
+  redis-cache:
+    restart: always
+    image: redis:6.0-alpine
+    command: "--databases 255"
+    container_name: magento-redis-cache
+    env_file:
+      - '.env'
+
+  redis-session:
+    restart: always
+    image: redis:6.0-alpine
+    command: "--databases 255"
+    container_name: magento-redis-session
+    env_file:
+      - '.env'
+
+  elasticsearch:
+    image: elasticsearch
+    restart: always
+    build:
+      context: elasticsearch
+    container_name: magento-elasticsearch
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "discovery.type=single-node"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data:rw # Persistant volume
+    env_file:
+      - '.env'
+
+  traefik:
+    image: traefik:v2.5
+    container_name: "magento_traefik"
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.docker=true
+      - --providers.file.directory=/etc/traefik/dynamic_conf
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --accesslog=true
+      - --log.level=DEBUG
+    ports:
+      - '80:80'
+      - '443:443'
+      - '8080:8080'
+    volumes:
+      - ./traefik/certs:/traefik/certs
+      - ./traefik/config.yml:/etc/traefik/dynamic_conf/conf.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - '.env'
+
+  magento2:
+    container_name: magento2
+    build:
+      context: magento-web
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - ./magento/:/var/www/magento
+      - ${COMPOSER_CACHE_DIR}:/root/.composer/cache
+    labels:
+      - traefik.http.routers.magento2-http.rule=Host(`${MAGENTO_BASE_URL}`)
+      - traefik.http.routers.magento2-http.entrypoints=web
+      - traefik.http.routers.magento2-http.middlewares=redirect
+      - traefik.http.routers.magento2-https.rule=Host(`${MAGENTO_BASE_URL}`)
+      - traefik.http.routers.magento2-https.entrypoints=websecure
+      - traefik.http.routers.magento2-https.tls=true
+      - traefik.http.services.magento2.loadbalancer.server.port=80
+      - traefik.http.middlewares.redirect.redirectscheme.scheme=https
+    environment:
+      - MAGENTO_BASE_URL
+    env_file:
+      - '.env'
+    depends_on:
+      - db
+      - traefik
+      - rabbitmq
+      - elasticsearch
+      - redis-cache
+      - redis-session
+
+
+  rabbitmq:
+    hostname: rabbitmq
+    restart: always
+    build:
+      context: rabbitmq
+    container_name: rabbitmq
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq/mnesia/
+    environment:
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbitmq_management path_prefix "/rabbitmq"
+    expose:
+      - 15672
+      - 5672
+      - 5673
+    env_file:
+      - '.env'

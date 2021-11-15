@@ -1,0 +1,4 @@
+tls:
+  certificates:
+    - certFile: /traefik/certs/magento2.local.crt
+      keyFile: /traefik/certs/magento2.local.key

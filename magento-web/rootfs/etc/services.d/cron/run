@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv sh
+
+exec /usr/sbin/cron -f -L 8
